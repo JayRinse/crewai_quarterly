@@ -5,7 +5,8 @@ from sqlalchemy import make_url
 from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.core import VectorStoreIndex, StorageContext, PromptTemplate #, Settings, QueryBundle
 from llama_index.core.postprocessor import SimilarityPostprocessor
-from llm_select import gemini_flash
+from tools.llm_select import gemini_flash
+# from llm_select import gemini_flash
 
 selection = 'geimini15flash'
 
@@ -50,14 +51,15 @@ vdb = {
     "vdb": db_name
 }
 
-class RAGTool():
 
-    @tool("RAG Tool")
-    def retrieve(
+class VDBTool():
+
+    @tool("VDB Tool")
+    def query(
         query_string: str=None,
     ):
         """
-        A tool used to retrieve information from a database and synthesize it into an answer.
+        A tool used to retrieve information from a database.
         """
         vector_store = PGVectorStore.from_params(
             database=db_name,
@@ -65,7 +67,7 @@ class RAGTool():
             password=vdb['password'],
             port=vdb['port'],
             user=vdb['username'],
-            table_name='idea_farm',
+            table_name='alpine',
             embed_dim=model_dict[selection]['embed_dim'],
             hybrid_search=True,
             text_search_config="english"
@@ -81,13 +83,85 @@ class RAGTool():
         )
 
         prompt_tmpl = PromptTemplate("""\
-        You are a professional investment analyst assisting a financial advisor. \n
+        You are a professional investment research analyst assisting a financial advisor. \n
         ---------------------\n
         {context_str}
         ---------------------\n
-        Given the context information and not prior knowledge, answer the query.\n
+        Given the context information and not prior knowledge, provide as much information as possible on the query.\n
         Please write the answer as an investment professional who is writing a structured article, being as detailed as possible,
         explaining the thinking behind the answer. Do not reference any graphs.\n
+        Query: {query_str}
+        Answer: \
+        """)
+
+        query_engine = hybrid_index.as_query_engine(
+            vector_store_query_mode="hybrid",
+            similarity_top_k=7,
+            vector_store_kwargs={
+                "ivfflat_probes": 10,
+                "hnsw_ef_search": 300
+            },
+            node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.60)],
+        )
+
+        query_engine.update_prompts(
+            {"response_synthesizer:text_qa_template": prompt_tmpl}
+        )
+        prompts_dict = query_engine.get_prompts()
+
+        query_embedding = embed_model.get_query_embedding(query_string)
+        retrieval_response = query_engine.retrieve(
+            query_string,
+        )
+
+        return retrieval_response
+    
+### TEST ###
+# vdbtool = VDBTool()
+# response = vdbtool.query('tell me about industrials')
+# for idx, node in enumerate(response):
+#     print(response[idx].text)
+# print(response)
+# response[0].text
+
+class RAGTool():
+
+    @tool("RAG Tool")
+    def retrieve(
+        query_string: str=None,
+    ):
+        """
+        A tool used to retrieve information from a database and synthesize it into an answer.
+        """
+        vector_store = PGVectorStore.from_params(
+            database=db_name,
+            host=vdb['hostname'],
+            password=vdb['password'],
+            port=vdb['port'],
+            user=vdb['username'],
+            table_name='alpine',
+            embed_dim=model_dict[selection]['embed_dim'],
+            hybrid_search=True,
+            text_search_config="english"
+        )
+
+        storage_context = StorageContext.from_defaults(
+            vector_store=vector_store
+        )
+        hybrid_index = VectorStoreIndex.from_vector_store(
+            vector_store=vector_store,
+            storage_context=storage_context,
+            show_progress=False,
+        )
+
+        prompt_tmpl = PromptTemplate("""\
+        You are a professional investment research analyst assisting a financial advisor. \n
+        ---------------------\n
+        {context_str}
+        ---------------------\n
+        Given the context information and not prior knowledge, provide as much information as possible on the query.\n
+        Please write the answer as an investment professional who is writing a structured article, including all the
+        relevant information, being as detailed as possible, explaining the thinking behind the answer. Do not reference any graphs.\n
         Query: {query_str}
         Answer: \
         """)
@@ -117,6 +191,7 @@ class RAGTool():
             )
         return response
     
-# rag = RAGTool()
-# response = rag.retrieve('tell me about industrials')
+### TEST ###
+# ragtool = RAGTool()
+# response = ragtool.retrieve('tell me about industrials')
 # print(response)
