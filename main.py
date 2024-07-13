@@ -2,7 +2,7 @@ import os
 from crewai import Agent, Task, Crew, Process
 from textwrap import dedent
 from tools.scraper_tools import ScraperTool, URLTool
-from tools.rag_tools import RAGTool, VDBTool
+import vectordb_processing
 from tools.llm_select import gemini_flash, langchain_gemini_flash
 # from llama_index.llms.ollama import Ollama
 from langchain.llms import Ollama
