@@ -1,11 +1,15 @@
 import os
 from crewai import Agent, Task, Crew, Process
 from textwrap import dedent
-from tools.scraper_tools import ScraperTool, URLTool
+
+# from tools.scraper_tools import ScraperTool, URLTool
+from tools.rag_tools import RAGTool
 import vectordb_processing
 from tools.llm_select import gemini_flash, langchain_gemini_flash
+
 # from llama_index.llms.ollama import Ollama
-from langchain.llms import Ollama
+# from langchain.llms import Ollama
+from langchain_community.llms import Ollama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 import os
 
@@ -26,228 +30,118 @@ import os
 langchain_llm = langchain_gemini_flash()
 # manager_llm = langchain_gemini_flash()
 
-search_tool = URLTool().search_ddg
-scraper_tool = ScraperTool().scrape
-# rag_tool = RAGTool().retrieve
-vdb_tool = VDBTool().query
+rag_tool_q = RAGTool.search_rag_q
+rag_tool_dd = RAGTool.search_rag_dd
 
 class QuarterlyLetterCrew:
-  def __init__(self, topics, timeframe):
-    self.topics = topics
-    self.timeframe = timeframe
+	def __init__(self):
+		pass
 
-  def run(self):
-    # researcher = Agent(
-    #   role='Retrieve information from the database relevant to the topic provided by the user and do not edit it',
-    #   goal='Ask the user for a list of topics/questions, then use the RAG tool to go and find relevant information on the topics/questions, and provide the full content to the writer agent so it can be used to write a quarterly letter',
-    #   backstory="""You work at a large financial advisory firm.
-    #   Your expertise lie in taking topics and getting the relevant information using a RAG to provide the information to a financial writer.""",
-    #   verbose=True,
-    #   allow_delegation=False,
-    #   # tools=[rag_tool, vdb_tool],
-    #   tools=[rag_tool],
-    #   llm=langchain_llm
-    # )
-    url_researcher = Agent(
-      role='Retrieve relevant URLs from the internet related to the topic and timeframe indicated by the user. Then pass these URLs on the the text researcher agent',
-      goal='Ask the user for a list of topics/questions, then use the URL tool to find a maximum of 5 URLs to use for relevant information on the topics/questions, and provide the full lsit of URLs to the text researcher agent',
-      backstory="""You work at a large financial advisory firm.
-      Your expertise lie in taking topics and finding URLs related to those topics to assist the text_researcher to get information from websites.""",
-      verbose=True,
-      allow_delegation=False,
-      # tools=[rag_tool, vdb_tool],
-      tools=[search_tool],
-      llm=langchain_llm,
-      max_iter=1
-    )
-    text_researcher = Agent(
-      role='Retrieve relevant information from URLs which are provided to you by the url_researcher agent. Then use the URLs to scrape the content and pass it to the writer agent',
-      goal='Use the URL list provided by the url_researcher to scrape websites to use for relevant information on the topics/questions, and provide the full content to the writer agent so it can be used to write a quarterly letter',
-      backstory="""You work at a large financial advisory firm.
-      Your expertise lie in taking topics and getting the relevant information using URLs and scraping them to provide the information to a financial writer.""",
-      verbose=True,
-      allow_delegation=False,
-      # tools=[rag_tool, vdb_tool],
-      tools=[scraper_tool],
-      llm=langchain_llm,
-      max_iter=1
-    )
-    writer = Agent(
-      role='Quarterly investment newsletter writer',
-      goal='Write a compelling and detailed investment report focusing on events from the previous quarter based on the text passed to you by the researcher',
-      backstory="""You are a renowned investment writer, known for your insightful and well structured quarterly investment reports.
-      You transform complex concepts into compelling narratives for investment clients.""",
-      verbose=True,
-      allow_delegation=False,
-      llm=langchain_llm,
-      max_iter=3
-    )
+	def run(self):
+		q_generator = Agent(
+			role="Question_Generator_Agent",
+			goal="Identify relevant questions to be used to query a due dilligence document, to identify the strenghts and weaknesses of a fund",
+			backstory="""
+		You are an expert fund research analyst at a hedge fund, who is skilled in identifying meaningful questions
+		which can be used to gain insight into the strengths and weaknesses of a fund.
+		""",
+			instructions="""
+		When you need to search for information, use the rag_tool_q. 
+		To use this tool, provide a query_string that describes what you're looking for. 
+		Also provide the table_selection which is "questions".
+		For example: {"query_string": "What are common questions for fund due diligence?",
+		"table_selection": "questions"}
+		""",
+			verbose=True,
+			allow_delegation=False,
 
-    # manager = Agent(
-    #     role="Project Manager",
-    #     goal="Efficiently manage the crew and ensure high-quality task completion. Ensure the agents only attempt to complete a task once.",
-    #     backstory="You're an experienced project manager, skilled in overseeing complex projects and guiding teams to success. Your role is to coordinate the efforts of the crew members, ensuring that each task is completed on time and to the highest standard.",
-    #     allow_delegation=True,
-    # )
+			tools=[rag_tool_q],
+			llm=langchain_llm,
+			max_iter=1,
+		)
+		
+		ans_generator = Agent(
+			role="Answering_Agent",
+			goal="Answer the questions provided by the Question_Generator_Agent.",
+			backstory="""
+		You are an expert researcher at a hedge fund, who is skilled in finding answers to questions provided to you by the Question_Generator_Agent.
+		""",
+			instructions="""
+		Answer the questions given to you by the Question_Generator_Agent. You must answer those specific questions by using rag_tool_dd. Systematically
+		answer the questions provided to you by the Question_Generator_Agent by using the questions and querying the due diligence document using the rag_tool_dd.
+		Also provide the table_selection which is "dd".
+		For example, if the Questions_Generator_Agent asked "What types of investments will the fund pursue?, you are able to use the rag_tool_dd
+		to ask that exact question and record its reponse. For example: {"query_string": "What types of investments will the fund pursue?", "table_selection": "dd"}
+		""",
+			verbose=True,
+			allow_delegation=False,
 
-    # assistant = Agent(
-    # role='Research Assistant',
-    # goal='Provide additional information to support the writer using the vector database',
-    # backstory="""You are a diligent research assistant with access to a vast database of financial information. 
-    # Your job is to supplement the writer's work with relevant data and insights.""",
-    # verbose=True,
-    # allow_delegation=False,
-    # tools=[vdb_tool],
-    # llm=langchain_llm
-# )
+			tools=[rag_tool_dd],
+			llm=langchain_llm,
+			max_iter=5,
+		)
+		
+		task_gen_questions = Task(
+			description="""
+		Clearly identify a list of 5 questions that can be used to interrogate a due dilligence document of a fund.
+		""",
+			# {self.topics}, {self.timeframe}
+			agent=q_generator,
+			expected_output="A list of 5 questions that can be used to interrogate a due dilligence document of a fund.",
+			metadata={"table_selection": "questions"},
+		)
+		
+		task_ans_questions = Task(
+			description="""
+		Try to find the answers to the questions posed by Question_Generator_Agent.
+		""",
+			agent=ans_generator,
+			expected_output="A list of all the answers to the questions provided to you.",
+			context=[task_gen_questions],
+			metadata={"table_selection": "dd"},
+		)
 
-    # task = Task(
-    #   description="Generate a querterly report on the provided topics for the period specified. Find URLs related to the topics and timeframe, before scraping them and writing a structured report with an opening paragraph, body and closing paragraph. Return completed, edited report.",
-    #   expected_output="A comprehensive quarterly investment report on the provided topics for the provided timeframe",
-    # )
-    # Create tasks for your agents
-    task1 = Task(
-      description=f"""Take a list of topics that are provided by the user and retrieve relevant URLs by getting the URLs using the search 
-      tool and then passing the list to the test_researcher agent. You can ask 5 queries about the topic to get relevant URLs for the text_researcher.
-      Here are the topics from the user that you need to review: {self.topics}, and the quarter and year: {self.timeframe}.""",
-      agent=url_researcher,
-      expected_output="Comprehensive list of URLs to be passed to the text_researcher.",
-    )
-    task2 = Task(
-      description=f"""Take a list of URLs provided by the url_researcher and scrape the webistes for relevant information related to the 
-      topics that are provided by the user. Once you have enough relevant information, pass all the information to the writer agent who will write a quarterly report
-      on the information provided.""",
-      agent=text_researcher,
-      expected_output="Comprehensive information about the topics provided for the timeframe provided to be passed to the writer agent.",
-    )
-    # task1 = Task(
-    #   description=f"""Take a list of topics that are provided by the user and retrieve relevant information from the nodes using the VDB Tool 
-    #   and then pass it to the writer agent. Use multiple queries about the topic to get relevant content which will be usable by the writer.
-    #   Only ask the the VDB Tool one question at a time, with a maximum of 5 different queries.
-    #   Here are the topics from the user that you need to review: {self.topics}, and the quarter and year: {self.timeframe}.""",
-    #   agent=researcher,
-    #   expected_output="Comprehensive reesearch of the current topics, including key insights, relevant data, and future predictions."
-    # )
+		QuarterlyLetterCrew = Crew(
+			# agents=[researcher, writer, assistant],
+			# tasks=[task1, task2, task3, task4],
+			agents=[q_generator, ans_generator],
+			tasks=[task_gen_questions, task_ans_questions],
+			verbose=2,  # You can set it to 1 or 2 to different logging levels
+			process=Process.sequential,
+			# manager_llm=manager_llm
+			# process=Process.hierarchical,
+		)
 
-    task3 = Task(
-      description="""Using the text provided by the researcher agent, develop a well structured quarterly report based on the provided text, 
-      ensuring that each topic is a single paragraph. It should also contain an opening paragraph and a closing paragraph.""",
-      agent=writer,
-      expected_output="A well-written, comprehensive quarterly report on the given topics, including key insights, relevant data, and future predictions with explanations."
-    )
+		QuarterlyLetterCrew.kickoff()
 
-    # task3 = Task(
-    #     description="""Review the writer's draft and use the vdb_tool to find additional relevant information. 
-    #     Focus on supporting data, recent trends, or expert opinions that could enhance the report.""",
-    #     agent=assistant,
-    #     expected_output="Additional relevant information and insights to enhance the quarterly report."
-    # )
+		result = QuarterlyLetterCrew.kickoff()
+		print(result)
+		return result
 
-    # task4 = Task(
-    #     description="""Using the text provided by the researcher agent and the additional information from the assistant, 
-    #     develop a final well-structured quarterly report. Ensure each topic is a single paragraph, with an opening and closing paragraph.""",
-    #     agent=writer,
-    #     expected_output="A comprehensive, well-written quarterly report incorporating all provided information and insights."
-    # )
-    
-    # Instantiate your crew with a sequential process
-    QuarterlyLetterCrew = Crew(
-      # agents=[researcher, writer, assistant],
-      # tasks=[task1, task2, task3, task4],
-      agents=[url_researcher, text_researcher, writer],
-      tasks=[task1, task2, task3],
-      verbose=2, # You can set it to 1 or 2 to different logging levels
-      # process=Process.hierarchical,
-      # manager_llm=manager_llm
-      # process=Process.hierarchical,
-    )
-
-    QuarterlyLetterCrew.kickoff()
-      
-    result = QuarterlyLetterCrew.kickoff()
-    return result
 
 if __name__ == "__main__":
-  print("## Welcome to Quarterly Report Writer")
-  print('-------------------------------')
-  topics = input(
-    dedent("""
-      What are the topics/questions you want to add to the report?
-    """))
-  timeframe = input(
-    dedent("""
-      What are the quarter and year?
-    """))
-  
-  report_crew = QuarterlyLetterCrew(topics, timeframe)
-  result = report_crew.run()
-  print("\n\n########################")
-  print("## Here is the Result")
-  print("########################\n")
-  print(result)
+	print("## Welcome to Quarterly Report Writer")
+	print("-------------------------------")
+	# topics = input(
+	#   dedent("""
+	#     What are the topics/questions you want to add to the report?
+	#   """))
+	# timeframe = input(
+	#   dedent("""
+	#     What are the quarter and year?
+	#   """))
 
-
-
-# scrape_tool = ScraperTool().scrape
-
-# class NewsletterCrew:
-#   def __init__(self, urls):
-#     self.urls = urls
-
-#   def run(self):
-#     scraper = Agent(
-#       role='Summarizer of Websites',
-#       goal='Ask the user for a list of URLs, then use the WebsiteSearchTool to then scrape the content, and provide the full content to the writer agent so it can then be summarized',
-#       backstory="""You work at a leading tech think tank.
-#       Your expertise is taking URLs and getting just the text-based content of them.""",
-#       verbose=True,
-#       allow_delegation=False,
-#       tools=[scrape_tool]
-#     )
-#     writer = Agent(
-#       role='Tech Content Summarizer and Writer',
-#       goal='Craft compelling short-form content on AI advancements based on long-form text passed to you',
-#       backstory="""You are a renowned Content Creator, known for your insightful and engaging articles.
-#       You transform complex concepts into compelling narratives.""",
-#       verbose=True,
-#       allow_delegation=True,
-#     )
-
-#     # Create tasks for your agents
-#     task1 = Task(
-#       description=f"""Take a list of websites that contain AI content, read/scrape the content and then pass it to the writer agent
-      
-#       here are the URLs from the user that you need to scrape: {self.urls}""",
-#       agent=scraper
-#     )
-
-#     task2 = Task(
-#       description="""Using the text provided by the scraper agent, develop a short and compelling/interesting short-form summary of the 
-#       text provided to you about AI""",
-#       agent=writer
-#     )
-
-#     # Instantiate your crew with a sequential process
-#     NewsletterCrew = Crew(
-#       agents=[scraper, writer],
-#       tasks=[task1, task2],
-#       verbose=2, # You can set it to 1 or 2 to different logging levels
-#     )
-
-#     NewsletterCrew.kickoff()
-
-# if __name__ == "__main__":
-#   print("## Welcome to Newsletter Writer")
-#   print('-------------------------------')
-#   urls = input(
-#     dedent("""
-#       What is the topic you want to write about?
-#     """))
-  
-#   newsletter_crew = NewsletterCrew(urls)
-#   result = newsletter_crew.run()
-#   print("\n\n########################")
-#   print("## Here is the Result")
-#   print("########################\n")
-#   print(result)
-# Define your agents with roles and goals
+	report_crew = QuarterlyLetterCrew()
+	result = report_crew.run()
+	print("\n\n########################")
+	print("## Here is the Result")
+	print("########################\n")
+	print(result)
+	# with open('output.md', "w") as file:
+	#   print('\n\nThese results have been exported to output.md')
+	#   file.write(result)
+	print(f"""
+    Task completed!
+    Task: {report_crew.task_gen_questions.output.description}
+    Output: {report_crew.task_gen_questions.output.raw_output}
+""")
